@@ -132,8 +132,6 @@ class TestPluginQueries(unittest.TestCase):
                                          'tags={}'.format(tags), 'notes={}'.format(notes), 'email={}'.format(email),
                                          'expiry_date={}'.format(expiry_date), 'reason={}'.format(reason)])
         self.assertEqual(self.tpm_init_mock.call_args[0][0], tpmurl, 'tpmurl not passed')
-        self.assertEqual(self.tpm_init_mock.call_args[1].get('username'), tpmuser, 'tpmuser not passed')
-        self.assertEqual(self.tpm_init_mock.call_args[1].get('password'), tpmpass, 'tpmpass not passed')
         self.assertEqual(self.tpm_init_mock.call_args[1].get('unlock_reason'), reason, 'unlock_reason not passed')
         self.assertEqual(mock_search.call_args[0][0], 'name:[{}]'.format(search), 'search not passed')
         self.assertEqual(mock_create.call_args[0][0].get('project_id'), project_id, 'project_id not passed')

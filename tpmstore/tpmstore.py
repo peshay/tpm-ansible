@@ -6,11 +6,21 @@
 # File: tpmstore.py
 #
 
+#import sys; sys.stdin = open('/dev/tty')
+#import pdb; pdb.set_trace()
+
+from ansible import utils, errors, constants
 from ansible.errors import AnsibleError, AnsibleParserError
 from ansible.plugins.lookup import LookupBase
 import tpm
-"""
-DOCUMENTATION:
+
+try:
+    from __main__ import display
+except ImportError:
+    from ansible.utils.display import Display
+    display = Display()
+
+DOCUMENTATION = """
     lookup: tpmstore
     version_added: "2.4"
     short_description: returns password from TeamPasswordManager
@@ -26,25 +36,45 @@ DOCUMENTATION:
         tpmuser:
             description:
                 - User to authenticate against TeamPasswordManager API. Should always be second parameter.
-            required: True
+            required: False
         tpmpass:
             description:
                 - Password to authenticate against TeamPasswordManager API. Should always be third parameter.
-            required: True
+            required: False
         search:
             description:
                 - Searchtstring to use for the TeamPasswordManager search.
-            required: If 'name' is not set.
+            required: False
             default: 'name:[name]'
         name:
             description:
                 - Name of the entry in TeamPasswordManager. Will search for exact match.
-            required: If 'search' is not set.
+            required: False
         return_value:
             description:
                 - Which fields from found entries should be returned.
             required: False
             default: password
+        private_key:
+            description:
+                - Private key to connect to the TeamPasswordManager API
+            required: False
+            default: ''
+        public_key:
+            description:
+                - Public key to connect to the TeamPasswordManager API
+            required: False
+            default: ''
+        certificate:
+            description:
+                - The certificate to use to connect to the TeamPasswordManager API
+            required: False
+            default: ''
+        certificate_key:
+            description:
+                - The private key for certificate to use to connect to the TeamPasswordManager API
+            required: False
+            default: ''
         create:
             description:
                 - If False the plugin will only query for a password.
@@ -66,23 +96,25 @@ DOCUMENTATION:
                   If set to "random" a new random password will be generated, updated to TeamPasswordManager and returned.
         username:
             description:
-                - Wil update or set the field "username" for the TeamPasswordManager entry.
+                - Will update or set the field "username" for the TeamPasswordManager entry.
         access_info:
             description:
-                - Wil update or set the field "access_info" for the TeamPasswordManager entry.
+                - Will update or set the field "access_info" for the TeamPasswordManager entry.
         tags:
             description:
-                - Wil update or set the field "tags" for the TeamPasswordManager entry.
+                - Will update or set the field "tags" for the TeamPasswordManager entry.
         email:
             description:
-                - Wil update or set the field "email" for the TeamPasswordManager entry.
+                - Will update or set the field "email" for the TeamPasswordManager entry.
         expiry_date:
             description:
-                - Wil update or set the field "expiry_date" for the TeamPasswordManager entry.
+                - Will update or set the field "expiry_date" for the TeamPasswordManager entry.
         notes:
             description:
-                - Wil update or set the field "notes" for the TeamPasswordManager entry.
-EXAMPLES:
+                - Will UPdate or set the field "notes" for the TeamPasswordManager entry.
+"""
+
+EXAMPLES = """
   vars_prompt:
     - name: "tpmuser"
       prompt: "what is your TeamPasswordManager username?"
@@ -99,9 +131,9 @@ EXAMPLES:
      newrandom_password: "{{ lookup('tpmstore', tpmurl, tpmuser, tpmpass, 'name=An existing entry name', 'create=True', 'password=random') }}"
      updatemore_values: "{{ lookup('tpmstore', tpmurl, tpmuser, tpmpass, 'name=An existing entry name', 'create=True', 'password=random', 'username=root', 'access_info=ssh://root@host', 'tags=root,ssh,aws,cloud', 'notes=Created by Ansible') }}"
      completenew_entry: "{{ lookup('tpmstore', tpmurl, tpmuser, tpmpass, 'name=An existing entry name', 'create=True', 'project_id=4', 'password=random', 'username=root', 'access_info=ssh://root@host', 'tags=root,ssh,aws,cloud', 'notes=Created by Ansible') }}"
+"""
 
-
-RETURN:
+RETURN = """
   _list:
     description:
       - list containing the queried or created password
@@ -115,29 +147,33 @@ except ImportError:
     display = Display()
 
 class TermsHost(object):
-    
+
     def __init__(self, terms):
-        # We need at least 4 parameters: api-url, api-user, api-password, entry name
-        if len(terms) < 4:
-            raise AnsibleError("At least 4 arguments required.")
+        # We need at least 2 parameters: api-url, entry name
+        # or: api-url, private_key, public_key, entry name
+
+
+        if len(terms) < 2:
+            raise AnsibleError("At least 2 arguments required.")
         # Fill the mandatory values
-        self.tpmurl=terms.pop(0)
-        self.tpmuser=terms.pop(0)
-        self.tpmpass=terms.pop(0)
+        self.tpmurl = terms.pop(0)
+        self.name = terms.pop(0)
         self.work_on_terms(terms)
         self.verify_values()
         self.match = self.initiate_search()
-    
+
     def verify_values(self):
         """Verify the correctness of all the values."""
         # verify if either search or name is set
+
         if not hasattr(self, 'name') and not hasattr(self, 'search'):
             raise AnsibleError('Either "name" or "search" have to be set.')
-            
+
     def work_on_terms(self, terms):
         """Collect all the terms."""
         self.create = False
         self.new_entry = {}
+
         for term in terms:
             if "=" in term:
                 (key, value) = term.split("=")
@@ -146,9 +182,9 @@ class TermsHost(object):
                     # get entry
                     self.name = value
                     self.new_entry.update({'name': self.name})
-                if key == 'search':
+                if key == "search":
                     self.search = value
-                if key == 'return_value':
+                if key == "return_value":
                     self.return_value = value
                 # if not just lookup, but also create/update an entry
                 if key == "create":
@@ -159,33 +195,51 @@ class TermsHost(object):
                     else:
                         raise AnsibleError("create can only be True or False and not: {}".format(value))
                 # optional parameters for create/update of an entry
+                if key == "tpmuser":
+                    self.tpmuser = value
+                    self.new_entry.update({"tpmuser": self.tpmuser})
+                if key == "tpmpass":
+                    self.tpmpass = value
+                    self.new_entry.update({"tpmpass": self.tpmpass})
                 if key == "password":
                     self.password = value
-                    self.new_entry.update({'password': self.password})
+                    self.new_entry.update({"password": self.password})
                 if key == "username":
                     self.username = value
-                    self.new_entry.update({'username': self.username})
+                    self.new_entry.update({"username": self.username})
                 if key == "access_info":
                     self.access_info = value
-                    self.new_entry.update({'access_info': self.access_info})
+                    self.new_entry.update({"access_info": self.access_info})
                 if key == "tags":
                     self.tags = value
-                    self.new_entry.update({'tags': self.tags})
+                    self.new_entry.update({"tags": self.tags})
                 if key == "email":
                     self.email = value
-                    self.new_entry.update({'email': self.email})
+                    self.new_entry.update({"email": self.email})
                 if key == "expiry_date":
                     self.expiry_date = value
-                    self.new_entry.update({'expiry_date': self.expiry_date})
+                    self.new_entry.update({"expiry_date": self.expiry_date})
                 if key == "notes":
                     self.notes = value
-                    self.new_entry.update({'notes': self.notes})
+                    self.new_entry.update({"notes": self.notes})
                 if key == "reason":
                     self.unlock_reason = value
                 # project_id is mandatory if no entry exists and create == True
                 if key == "project_id":
                     self.project_id = value
-                    self.new_entry.update({'project_id': self.project_id})
+                    self.new_entry.update({"project_id": self.project_id})
+                if key == "certificate":
+                    self.certificate = value
+                    self.new_entry.update({"certificate": self.certificate})
+                if key == "certificate_key":
+                    self.certificate_key = value
+                    self.new_entry.update({"certificate_key": self.certificate_key})
+                if key == "private_key":
+                    self.private_key = value
+                    self.new_entry.update({"private_key": self.private_key})
+                if key == "public_key":
+                    self.public_key = value
+                    self.new_entry.update({"public_key": self.public_key})
 
     def initiate_search(self):
         # format the search to get an exact result for name
@@ -196,17 +250,23 @@ class TermsHost(object):
         # set default return_value to 'password'
         if not hasattr(self, 'return_value'):
             self.return_value = 'password'
-            
+
+        parms={}
+        if hasattr(self, "tpmuser"): parms["tpmuser"] = str(self.tpmuser)
+        if hasattr(self, "tpmpass"): parms["tpmpass"] = str(self.tpmpass)
+        if hasattr(self, "certificate"): parms["certificate"] = str(self.certificate)
+        if hasattr(self, "certificate_key"): parms["certificate_key"] = str(self.certificate_key)
+        if hasattr(self, "public_key"): parms["public_key"] = str(self.public_key)
+        if hasattr(self, "private_key"): parms["private_key"] = str(self.private_key)
+        if hasattr(self, "unlock_reason"): parms['unlock_reason'] = str(self.unlock_reason)
+
         try:
-            if hasattr(self, "unlock_reason"):
-                self.tpmconn = tpm.TpmApiv4(self.tpmurl, username=self.tpmuser, password=self.tpmpass, unlock_reason=self.unlock_reason)
-            else:
-                self.tpmconn = tpm.TpmApiv4(self.tpmurl, username=self.tpmuser, password=self.tpmpass)
+            self.tpmconn = tpm.TpmApiv4(self.tpmurl, **parms)
             match = self.tpmconn.list_passwords_search(search)
-        except tpm.TpmApiv4.ConfigError as e:
+        except tpm.TpmApiv4.ConfigError as ex:
             raise AnsibleError("First argument has to be a valid URL to TeamPasswordManager API: {}".format(self.tpmurl))
-        except tpm.TPMException as e:
-            raise AnsibleError(e)
+        except tpm.TPMException as ex:
+            raise AnsibleError(ex)
         return match
 
 
